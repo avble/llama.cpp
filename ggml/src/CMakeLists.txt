@@ -1321,7 +1321,7 @@ endif()
 
 # ggml
 
-add_library(ggml
+add_library(ggml STATIC
             ../include/ggml.h
             ../include/ggml-alloc.h
             ../include/ggml-backend.h
