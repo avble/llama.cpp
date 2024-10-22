@@ -210,7 +210,7 @@ if (GGML_BACKEND_DL)
     target_compile_definitions(ggml-base PUBLIC GGML_BACKEND_DL)
 endif()
 
-add_library(ggml
+add_library(ggml STATIC
             ggml-backend-reg.cpp)
 add_library(ggml::ggml ALIAS ggml)
 
