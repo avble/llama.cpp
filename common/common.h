@@ -22,7 +22,7 @@
     fprintf(stderr, "%s: built with %s for %s\n", __func__, LLAMA_COMPILER, LLAMA_BUILD_TARGET);    \
 } while(0)
 
-#define DEFAULT_MODEL_PATH "models/7B/ggml-model-f16.gguf"
+#define DEFAULT_MODEL_PATH "./Phi-3-mini-4k-instruct-q4.gguf"
 
 struct llama_lora_adapter_info {
     std::string path;
