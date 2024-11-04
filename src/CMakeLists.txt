@@ -11,7 +11,7 @@ endif()
 
 # llama
 
-add_library(llama
+add_library(llama STATIC
             ../include/llama.h
             llama.cpp
             llama-vocab.cpp
