@@ -860,7 +860,7 @@ std::string fs_get_cache_directory() {
 #elif defined(_WIN32)
         cache_directory = std::getenv("LOCALAPPDATA");
 #else
-#  error Unknown architecture
+//#  error Unknown architecture
 #endif
         cache_directory = ensure_trailing_slash(cache_directory);
         cache_directory += "llama.cpp";
