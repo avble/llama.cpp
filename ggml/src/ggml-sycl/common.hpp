@@ -19,6 +19,9 @@
 #include "dpct/helper.hpp"
 #include "ggml-sycl.h"
 #include "presets.hpp"
+#include "sycl_hw.hpp"
+
+
 #if GGML_SYCL_DNNL
 #include "dnnl.hpp"
 #include "dnnl_sycl.hpp"
@@ -26,12 +29,21 @@
 
 #define GGML_COMMON_DECL_SYCL
 #define GGML_COMMON_IMPL_SYCL
+/* suppress warning spam */
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wnested-anon-types"
 #include "ggml-common.h"
+#pragma clang diagnostic pop
+#include "ggml-impl.h"
 
 void* ggml_sycl_host_malloc(size_t size);
 void ggml_sycl_host_free(void* ptr);
 
-static int g_ggml_sycl_debug = 0;
+
+extern int g_ggml_sycl_debug;
+extern int g_ggml_sycl_disable_optimize;
+extern int g_ggml_sycl_prioritize_dmmv;
+
 #define GGML_SYCL_DEBUG(...)        \
   do {                              \
     if (g_ggml_sycl_debug)          \
@@ -69,10 +81,6 @@ static int g_ggml_sycl_debug = 0;
 // max batch size to use MMQ kernels when tensor cores are available
 #define MMQ_MAX_BATCH_SIZE 32
 
-#if defined(_MSC_VER)
-#pragma warning(disable : 4244 4267) // possible loss of data
-#endif
-
 // dmmv = dequantize_mul_mat_vec
 #ifndef GGML_SYCL_DMMV_X
 #define GGML_SYCL_DMMV_X 32
@@ -107,17 +115,12 @@ static void crash() {
   GGML_ABORT("SYCL error");
 }
 
-#define SYCL_CHECK(err)                     \
-  do {                                      \
-    auto err_ = (err);                      \
-    if (err_ != 0)                          \
-      ggml_sycl_error(                      \
-          #err,                             \
-          __func__,                         \
-          __FILE__,                         \
-          __LINE__,                         \
-          "Meet error in this line code!"); \
-  } while (0)
+#define SYCL_CHECK(err)                                                                                    \
+    do {                                                                                                   \
+        auto err_ = (err);                                                                                 \
+        if (err_ != 0)                                                                                     \
+            ggml_sycl_error(#err, __func__, __FILE__, __LINE__, "Exception caught in this line of code."); \
+    } while (0)
 
 #if DPCT_COMPAT_RT_VERSION >= 11100
 #define GGML_SYCL_ASSUME(x) __builtin_assume(x)
@@ -159,7 +162,6 @@ static size_t g_scratch_offset = 0;
 int get_current_device_id();
 
 inline dpct::err0 ggml_sycl_set_device(const int device) try {
-
   int current_device_id;
   SYCL_CHECK(CHECK_TRY_ERROR(current_device_id = get_current_device_id()));
 
@@ -178,17 +180,23 @@ inline dpct::err0 ggml_sycl_set_device(const int device) try {
 }
 
 //////////////////////
+struct optimize_feature {
+    bool reorder=false;
+};
+
+struct sycl_device_info {
+    int     cc;                 // compute capability
+    // int     nsm;                // number of streaming multiprocessors
+    // size_t  smpb;               // max. shared memory per block
+    bool    vmm;                // virtual memory support
+    size_t  total_vram;
+    sycl_hw_info hw_info;
+    optimize_feature opt_feature;
+};
+
 
 struct ggml_sycl_device_info {
     int device_count;
-
-    struct sycl_device_info {
-        int     cc;                 // compute capability
-        // int     nsm;                // number of streaming multiprocessors
-        // size_t  smpb;               // max. shared memory per block
-        bool    vmm;                // virtual memory support
-        size_t  total_vram;
-    };
 
     sycl_device_info devices[GGML_SYCL_MAX_DEVICES] = {};
 
@@ -225,6 +233,14 @@ struct ggml_sycl_pool_alloc {
         }
     }
 
+    T * realloc(size_t size) {
+        GGML_ASSERT(pool != nullptr);
+        if (ptr)
+            pool->free(ptr, actual_size);
+        ptr = (T *) pool->alloc(size * sizeof(T), &this->actual_size);
+        return ptr;
+    }
+
     // size is in number of elements
     T * alloc(size_t size) {
         GGML_ASSERT(pool != nullptr);
@@ -256,17 +272,46 @@ struct ggml_tensor_extra_gpu {
                                        // tensors
   dpct::event_ptr events[GGML_SYCL_MAX_DEVICES]
                         [GGML_SYCL_MAX_STREAMS]; // events for synchronizing multiple GPUs
+  optimize_feature optimized_feature;
 };
 
+void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams={});
+
+inline optimize_feature check_gpu_optimize_feature(syclex::architecture &arch) {
+    optimize_feature opt;
+
+    opt.reorder =
+        (arch == syclex::architecture::intel_gpu_dg1 ||
+         arch == syclex::architecture::intel_gpu_acm_g10 ||
+         arch == syclex::architecture::intel_gpu_acm_g11 ||
+         arch == syclex::architecture::intel_gpu_acm_g12 ||
+         arch == syclex::architecture::intel_gpu_pvc ||
+         arch == syclex::architecture::intel_gpu_pvc_vg ||
+         arch == syclex::architecture::intel_gpu_mtl_u ||
+         arch == syclex::architecture::intel_gpu_mtl_s ||
+         arch == syclex::architecture::intel_gpu_mtl_h ||
+         arch == syclex::architecture::intel_gpu_arl_u ||
+         arch == syclex::architecture::intel_gpu_arl_s ||
+         arch == syclex::architecture::intel_gpu_arl_h ||
+         arch == syclex::architecture::intel_gpu_bmg_g21 ||
+         arch == syclex::architecture::intel_gpu_lnl_m
+        );
+
+    return opt;
+}
+
+namespace sycl_ex = sycl::ext::oneapi::experimental;
 struct ggml_backend_sycl_context {
     int device;
     std::string name;
+    optimize_feature opt_feature;
 
     queue_ptr qptrs[GGML_SYCL_MAX_DEVICES][GGML_SYCL_MAX_STREAMS] = { { nullptr } };
 
     explicit ggml_backend_sycl_context(int device) :
         device(device),
         name(GGML_SYCL_NAME + std::to_string(device)) {
+        opt_feature = ggml_sycl_info().devices[device].opt_feature;
     }
 
     queue_ptr stream(int device, int stream) {
@@ -324,12 +369,35 @@ struct ggml_backend_sycl_context {
     dnnl::stream stream_dnnl() {
         return stream_dnnl(device, 0);
     }
+    dnnl::memory get_scratchpad_mem(const dnnl::memory::desc & scratchpad_md,
+                                    const dnnl::engine & eng, const queue_ptr q) {
+        ggml_sycl_pool_alloc<uint8_t> * pool;
+        auto it = scratchpad_map.find(q);
+        if (it == scratchpad_map.end()) {
+            scratchpad_map[q] = std::make_unique<ggml_sycl_pool_alloc<uint8_t>>(this->pool());
+            pool = scratchpad_map[q].get();
+        } else {
+            pool = it->second.get();
+        }
+
+        size_t scratchpad_size = scratchpad_md.get_size();
+        if (scratchpad_size > pool->actual_size) {
+            pool->realloc(scratchpad_size);
+        }
+        void * mem_ptr = pool->get();
+        return dnnl::memory(scratchpad_md, eng, mem_ptr);
+    }
 #endif
 
     // pool
     std::unique_ptr<ggml_sycl_pool> pools[GGML_SYCL_MAX_DEVICES];
+    std::unordered_map<sycl::queue *, std::unique_ptr<ggml_sycl_pool_alloc<uint8_t>>> scratchpad_map;
+
+    std::unique_ptr<ggml_sycl_pool> host_pools[GGML_SYCL_MAX_DEVICES];
 
     static std::unique_ptr<ggml_sycl_pool> new_pool_for_device(queue_ptr qptr, int device);
+
+    static std::unique_ptr<ggml_sycl_pool> new_pool_for_host(queue_ptr qptr, int device);
 
     ggml_sycl_pool & pool(int device) {
         if (pools[device] == nullptr) {
@@ -341,6 +409,19 @@ struct ggml_backend_sycl_context {
     ggml_sycl_pool & pool() {
         return pool(device);
     }
+
+#ifdef GGML_SYCL_GRAPH
+    std::unique_ptr<sycl_ex::command_graph<sycl_ex::graph_state::executable>> exec_graph = nullptr;
+#endif
+
+    ggml_sycl_pool & host_pool(int device) {
+        if (host_pools[device] == nullptr) {
+            host_pools[device] = new_pool_for_host(stream(device, 0), device);
+        }
+        return *host_pools[device];
+    }
+
+    ggml_sycl_pool & host_pool() { return host_pool(device); }
 };
 
 // common device functions
@@ -404,4 +485,9 @@ static __dpct_inline__ Tp* get_pointer(sycl::local_accessor<Tp, dim> acc) {
 
 int64_t downsample_sycl_global_range(int64_t accumulate_block_num, int64_t block_size);
 
+constexpr size_t ceil_div(const size_t m, const size_t n) {
+    return (m + n - 1) / n;
+}
+
+bool gpu_has_xmx(sycl::device &dev);
 #endif // GGML_SYCL_COMMON_HPP
