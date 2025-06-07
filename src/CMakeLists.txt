@@ -6,7 +6,7 @@ llama_add_compile_flags()
 
 # llama
 
-add_library(llama STATIC
+add_library(llama
             ../include/llama.h
             llama.cpp
             llama-adapter.cpp
