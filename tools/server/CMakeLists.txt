@@ -1,4 +1,4 @@
-set(TARGET llama-server)
+set(TARGET llama-server-lib)
 
 option(LLAMA_SERVER_SSL "Build SSL support for the server" OFF)
 
