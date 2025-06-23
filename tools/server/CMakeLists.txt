@@ -30,7 +30,8 @@ foreach(asset ${PUBLIC_ASSETS})
     set_source_files_properties(${output} PROPERTIES GENERATED TRUE)
 endforeach()
 
-add_executable(${TARGET} ${TARGET_SRCS})
+# add_executable(${TARGET} ${TARGET_SRCS})
+add_library(${TARGET} STATIC ${TARGET_SRCS})
 install(TARGETS ${TARGET} RUNTIME)
 
 target_include_directories(${TARGET} PRIVATE ../llava)
@@ -48,3 +49,10 @@ if (WIN32)
 endif()
 
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+
+set(TARGET_MAIN llama-server)
+add_executable(${TARGET_MAIN} main.cpp)
+
+target_link_directories(${TARGET_MAIN} PRIVATE ${CMAKE_BINARY_DIR})
+target_link_libraries(${TARGET_MAIN} PRIVATE ${TARGET})
