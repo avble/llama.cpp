@@ -1,3 +1,5 @@
+// clang-format off
+
 #include "chat.h"
 #include "utils.hpp"
 
@@ -3657,7 +3659,9 @@ inline void signal_handler(int signal) {
     shutdown_handler(signal);
 }
 
-int main(int argc, char ** argv) {
+extern "C"
+int llama_server_main(int argc, char ** argv) {
+//int main(int argc, char ** argv) {
     // own arguments required by this example
     common_params params;
 
