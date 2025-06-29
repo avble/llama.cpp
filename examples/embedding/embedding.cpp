@@ -45,28 +45,27 @@ static void batch_decode(llama_context * ctx, llama_batch & batch, float * outpu
         LOG_ERR("%s : failed to process\n", __func__);
     }
 
-    for (int i = 0; i < batch.n_tokens; i++) {
-        if (!batch.logits[i]) {
-            continue;
-        }
+    if (pooling_type == LLAMA_POOLING_TYPE_NONE) {
+        for (int i = 0; i < batch.n_tokens; i++) {
+            if (!batch.logits[i]) {
+                continue;
+            }
 
-        const float * embd = nullptr;
-        int embd_pos = 0;
-
-        if (pooling_type == LLAMA_POOLING_TYPE_NONE) {
-            // try to get token embeddings
-            embd = llama_get_embeddings_ith(ctx, i);
-            embd_pos = i;
+            const float * embd = llama_get_embeddings_ith(ctx, i);
             GGML_ASSERT(embd != NULL && "failed to get token embeddings");
-        } else {
-            // try to get sequence embeddings - supported only when pooling_type is not NONE
-            embd = llama_get_embeddings_seq(ctx, batch.seq_id[i][0]);
-            embd_pos = batch.seq_id[i][0];
-            GGML_ASSERT(embd != NULL && "failed to get sequence embeddings");
+
+            float * out = output + i * n_embd;
+            common_embd_normalize(embd, out, n_embd, embd_norm);
         }
 
-        float * out = output + embd_pos * n_embd;
-        common_embd_normalize(embd, out, n_embd, embd_norm);
+    } else {
+        for (int seq_id = 0; seq_id < n_seq; seq_id++) {
+            const float * embd = llama_get_embeddings_seq(ctx, seq_id);
+            GGML_ASSERT(embd != NULL && "failed to get sequence embeddings");
+
+            float * out = output + seq_id * n_embd;
+            common_embd_normalize(embd, out, n_embd, embd_norm);
+        }
     }
 }
 
