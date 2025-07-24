@@ -187,7 +187,7 @@ if (GGML_BACKEND_DL AND NOT BUILD_SHARED_LIBS)
     message(FATAL_ERROR "GGML_BACKEND_DL requires BUILD_SHARED_LIBS")
 endif()
 
-add_library(ggml-base
+add_library(ggml-base STATIC
             ../include/ggml.h
             ../include/ggml-alloc.h
             ../include/ggml-backend.h
@@ -210,7 +210,7 @@ if (GGML_BACKEND_DL)
     target_compile_definitions(ggml-base PUBLIC GGML_BACKEND_DL)
 endif()
 
-add_library(ggml STATIC
+add_library(ggml
             ggml-backend-reg.cpp)
 add_library(ggml::ggml ALIAS ggml)
 
