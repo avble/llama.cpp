@@ -34,7 +34,7 @@ endforeach()
 add_library(${TARGET} STATIC ${TARGET_SRCS})
 install(TARGETS ${TARGET} RUNTIME)
 
-target_include_directories(${TARGET} PRIVATE ../llava)
+target_include_directories(${TARGET} PRIVATE ../mtmd)
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(${TARGET} PRIVATE common mtmd ${CMAKE_THREAD_LIBS_INIT})
 
