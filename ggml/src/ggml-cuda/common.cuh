@@ -107,9 +107,9 @@ constexpr bool ggml_cuda_has_arch(const int arch) {
     return ggml_cuda_has_arch_impl(arch, __CUDA_ARCH_LIST__);
 }
 
-constexpr int ggml_cuda_highest_compiled_arch_impl(const int arch, const int cur) {
+constexpr int ggml_cuda_highest_compiled_arch_impl(const int /*arch*/, const int cur) {
     if (cur == 0) {
-        GGML_ABORT("ggml was not compiled with any CUDA arch <= %d", arch);
+        return -1;
     }
     return cur;
 }
@@ -205,14 +205,6 @@ static const char * cu_get_error_str(CUresult err) {
 #else
 #define GGML_CUDA_ASSUME(x)
 #endif // CUDART_VERSION >= 11010
-
-#ifdef GGML_CUDA_F16
-typedef half dfloat; // dequantize float
-typedef half2 dfloat2;
-#else
-typedef float dfloat; // dequantize float
-typedef float2 dfloat2;
-#endif // GGML_CUDA_F16
 
 #if (!defined(GGML_USE_HIP) && !defined(GGML_CUDA_NO_VMM)) || (defined(GGML_USE_HIP) && !defined(GGML_HIP_NO_VMM))
 #define GGML_USE_VMM
@@ -428,16 +420,28 @@ static __device__ __forceinline__ half2 warp_reduce_sum(half2 a) {
 
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ int warp_reduce_all(int x) {
-#ifdef GGML_USE_HIP
+    if (width == ggml_cuda_get_physical_warp_size()) {
+        return __all_sync(0xffffffff, x);
+    } else {
 #pragma unroll
-    for (int offset = width/2; offset > 0; offset >>= 1) {
-        x = x && __shfl_xor_sync(0xffffffff, x, offset, width);
+        for (int offset = width/2; offset > 0; offset >>= 1) {
+            x = __shfl_xor_sync(0xffffffff, x, offset, width) && x;
+        }
+        return x;
     }
-    return x;
-#else
-    static_assert(width == WARP_SIZE, "width != WARP_SIZE not implemented");
-    return __all_sync(0xffffffff, x);
-#endif // GGML_USE_HIP
+}
+
+template<int width = WARP_SIZE>
+static __device__ __forceinline__ int warp_reduce_any(int x) {
+    if (width == ggml_cuda_get_physical_warp_size()) {
+        return __any_sync(0xffffffff, x);
+    } else {
+#pragma unroll
+        for (int offset = width/2; offset > 0; offset >>= 1) {
+            x = __shfl_xor_sync(0xffffffff, x, offset, width) || x;
+        }
+        return x;
+    }
 }
 
 template<int width = WARP_SIZE>
@@ -559,7 +563,7 @@ static __device__ __forceinline__ float ggml_cuda_e8m0_to_fp32(uint8_t x) {
 #endif // CUDART_VERSION >= 12050
 }
 
-typedef void (*dequantize_kernel_t)(const void * vx, const int64_t ib, const int iqs, dfloat2 & v);
+typedef void (*dequantize_kernel_t)(const void * vx, const int64_t ib, const int iqs, float2 & v);
 
 static __device__ __forceinline__ float get_alibi_slope(
     const float max_bias, const uint32_t h, const uint32_t n_head_log2, const float m0, const float m1
